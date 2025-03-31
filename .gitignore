@@ -1,0 +1,12 @@
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.log
+db.sqlite3
+.env
+ngrok
+ngrok-v3-stable-linux-amd64.tgz
+ngrok-v3-stable-linux-amd64.tgz.1

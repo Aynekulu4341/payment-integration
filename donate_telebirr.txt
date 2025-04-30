@@ -1,0 +1,1 @@
+Great! Your payment ID is TEL-1745569501. Paid from Telebirr account 251912345678 (Abebe Kebede). Go to http://localhost:8000/success to finish!

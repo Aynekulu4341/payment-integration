@@ -92,7 +92,6 @@ class WithdrawalRequestAdmin(admin.ModelAdmin):
             amount_usd = withdrawal.amount_usd or Decimal('0.00')
             amount_birr = withdrawal.amount_birr or Decimal('0.00')
 
-            # Calculate total available funds in the target currency
             available_usd = campaign.total_usd
             available_birr = campaign.total_birr
             if withdrawal.convert_to == 'usd':
@@ -106,13 +105,10 @@ class WithdrawalRequestAdmin(admin.ModelAdmin):
                 if amount_usd > total_available_usd:
                     self.message_user(request, f"Insufficient funds for withdrawal {withdrawal.id}! Requested {amount_usd} USD, available {total_available_usd} USD.", level=messages.ERROR)
                     continue
-                # Deduct proportionally
                 if amount_usd == total_available_usd:
-                    # Deduct all funds
                     deduct_usd = available_usd
                     deduct_birr = available_birr
                 else:
-                    # Deduct proportionally
                     deduct_usd = min(amount_usd, available_usd)
                     remaining_usd = amount_usd - deduct_usd
                     deduct_birr = (remaining_usd / Decimal(str(rate))).quantize(Decimal('0.01')) if rate != 0 else Decimal('0.00')
@@ -130,7 +126,6 @@ class WithdrawalRequestAdmin(admin.ModelAdmin):
                 if amount_birr > total_available_birr:
                     self.message_user(request, f"Insufficient funds for withdrawal {withdrawal.id}! Requested {amount_birr} ETB, available {total_available_birr} ETB.", level=messages.ERROR)
                     continue
-                # Deduct proportionally
                 if amount_birr == total_available_birr:
                     deduct_birr = available_birr
                     deduct_usd = available_usd
@@ -150,7 +145,6 @@ class WithdrawalRequestAdmin(admin.ModelAdmin):
                 deduct_usd = amount_usd
                 deduct_birr = amount_birr
 
-            # Update campaign balances
             campaign.total_usd -= deduct_usd
             campaign.total_birr -= deduct_birr
             campaign.total_usd = campaign.total_usd.quantize(Decimal('0.01'))

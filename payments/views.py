@@ -1,6 +1,5 @@
 from django.http import HttpResponse
 from django.conf import settings
-from django.views.decorators.csrf import csrf_exempt
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
@@ -47,7 +46,7 @@ def simulate_telebirr_transfer(amount, recipient_phone):
     if recipient:
         recipient["balance"] += amount
         logger.debug(f"Simulated Telebirr transfer: {amount} ETB to {recipient_phone}. New balance: {recipient['balance']}")
-        print(f"Telebirr account {recipient_phone} balance: {recipient['balance']} ETB")  # For debugging
+        print(f"Telebirr account {recipient_phone} balance: {recipient['balance']} ETB")
         return {'success': True, 'message': f"Transferred {amount} ETB to {recipient_phone}"}
     return {'success': False, 'message': f"Recipient {recipient_phone} not found!"}
 
@@ -185,30 +184,6 @@ class DonateView(APIView):
         return HttpResponse(f"Oops! Something went wrong with PayPal: {response.text}", status=response.status_code)
 
 class PaymentCallbackView(APIView):
-    @csrf_exempt
-    def get(self, request):
-        logger.debug(f"PaymentCallbackView.get called with query params: {request.GET}")
-        transaction_id = request.GET.get('token')
-        if not transaction_id:
-            logger.error("No token provided in PayPal callback")
-            return HttpResponse("Please provide a transaction ID!", status=400)
-
-        try:
-            transaction = Transaction.objects.get(transaction_id=transaction_id)
-        except Transaction.DoesNotExist:
-            logger.error(f"Transaction {transaction_id} not found")
-            return HttpResponse("We couldn’t find that transaction.", status=404)
-
-        if transaction.completed:
-            logger.debug(f"Transaction {transaction_id} already completed")
-            return HttpResponse("This payment is already done!", status=200)
-
-        if transaction.payment_method == 'paypal':
-            return self.verify_paypal_payment(transaction, request)
-        logger.error("Invalid payment method for GET request")
-        return HttpResponse("Invalid payment method for GET request.", status=400)
-
-    @csrf_exempt
     def post(self, request):
         logger.debug(f"PaymentCallbackView.post called with data: {request.data}")
         transaction_id = request.data.get('transaction_id')

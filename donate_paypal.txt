@@ -1,1 +1,0 @@
-Great! Your payment ID is 012497368P0375932. Go to https://www.sandbox.paypal.com/checkoutnow?token=012497368P0375932 to finish!

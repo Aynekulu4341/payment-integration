@@ -1,4 +1,4 @@
 from django.http import HttpResponse
 
 def home(request):
-    return HttpResponse("Welcome to the Community Funding System!")
+    return HttpResponse("Welcome to Community Funding!")

@@ -1,60 +1,42 @@
-"""
-Django settings for community_funding project.
-"""
-
 from pathlib import Path
 import os
 from dotenv import load_dotenv
-import dj_database_url
 
-# Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-# Load environment variables from .env
 load_dotenv(os.path.join(BASE_DIR, '.env'))
 
-# PayPal and Exchange Rate API credentials
 PAYPAL_CLIENT_ID = os.getenv('PAYPAL_CLIENT_ID')
 PAYPAL_CLIENT_SECRET = os.getenv('PAYPAL_CLIENT_SECRET')
 EXCHANGE_RATE_API_KEY = os.getenv('EXCHANGE_RATE_API_KEY')
 
-# Quick-start development settings - unsuitable for production
-# See https://docs.djangoproject.com/en/5.1/howto/deployment/checklist/
+SECRET_KEY = 'django-insecure-your-secret-key-here'
 
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-your-secret-key-here')
-
-# SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = os.getenv('DEBUG', 'True') == 'True'
+DEBUG = True
 
 ALLOWED_HOSTS = [
     'localhost',
     '127.0.0.1',
     '*.ngrok-free.app',
+    '83d5-35-190-204-197.ngrok-free.app',  # New URL
+    '62f9-34-78-238-122.ngrok-free.app',   # Keep old for reference
     'd2fa-34-38-160-61.ngrok-free.app',
     '940d-34-38-255-246.ngrok-free.app',
-    '27ee-35-240-107-102.ngrok-free.app',
     '5cb0-35-195-126-127.ngrok-free.app',
-    '0937-35-189-244-160.ngrok-free.app',  # Add new ngrok URL
     '*.cloudshell.dev',
     '8000-cs-1045846920909-default.cs-europe-west1-iuzs.cloudshell.dev',
-    '*.onrender.com',
 ]
-
 CSRF_TRUSTED_ORIGINS = [
     'http://localhost:8000',
-    'https://d2fa-34-38-160-61.ngrok-free.app',
-    'https://940d-34-38-255-246.ngrok-free.app',
-    'https://27ee-35-240-107-102.ngrok-free.app',
-    'https://5cb0-35-195-126-127.ngrok-free.app',
-    'https://0937-35-189-244-160.ngrok-free.app',  # Add new ngrok URL
     'https://*.ngrok-free.app',
+    'https://83d5-35-190-204-197.ngrok-free.app',  # New URL
+    'https://62f9-34-78-238-122.ngrok-free.app',   # Keep old
+    'https://d2fa-34-38-160-61.ngrok-free.app',
+    'https://5cb0-35-195-126-127.ngrok-free.app',
+    'https://940d-34-38-255-246.ngrok-free.app',
     'https://*.cloudshell.dev',
     'https://8000-cs-1045846920909-default.cs-europe-west1-iuzs.cloudshell.dev',
-    'https://*.onrender.com',
 ]
-
-# Application definition
 INSTALLED_APPS = [
     'django.contrib.admin',
     'django.contrib.auth',
@@ -96,15 +78,13 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'community_funding.wsgi.application'
 
-# Database - Configured for PostgreSQL
 DATABASES = {
-    'default': dj_database_url.config(
-        default=os.getenv('DATABASE_URL'),
-        conn_max_age=600
-    )
+    'default': {
+        'ENGINE': 'django.db.backends.sqlite3',
+        'NAME': BASE_DIR / 'db.sqlite3',
+    }
 }
 
-# Password validation
 AUTH_PASSWORD_VALIDATORS = [
     {
         'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator',
@@ -120,20 +100,22 @@ AUTH_PASSWORD_VALIDATORS = [
     },
 ]
 
-# Internationalization
 LANGUAGE_CODE = 'en-us'
 TIME_ZONE = 'UTC'
 USE_I18N = True
 USE_TZ = True
 
-# Static files (CSS, JavaScript, Images)
 STATIC_URL = '/static/'
-STATIC_ROOT = BASE_DIR / 'staticfiles'
 
-# Default primary key field type
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-# Logging configuration
+CSRF_TRUSTED_ORIGINS = [
+    'http://localhost:8000',
+    'https://d2fa-34-38-160-61.ngrok-free.app',
+    'https://*.ngrok-free.app',
+    'https://*.cloudshell.dev',
+]
+
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,
@@ -143,15 +125,11 @@ LOGGING = {
             'class': 'logging.FileHandler',
             'filename': BASE_DIR / 'debug.log',
         },
-        'console': {
-            'level': 'INFO',
-            'class': 'logging.StreamHandler',
-        },
     },
     'loggers': {
         'django': {
-            'handlers': ['file', 'console'],
-            'level': 'INFO',
+            'handlers': ['file'],
+            'level': 'DEBUG',
             'propagate': True,
         },
     },

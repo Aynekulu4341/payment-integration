@@ -18,24 +18,28 @@ ALLOWED_HOSTS = [
     'localhost',
     '127.0.0.1',
     '*.ngrok-free.app',
-    '83d5-35-190-204-197.ngrok-free.app',  # New URL
-    '62f9-34-78-238-122.ngrok-free.app',   # Keep old for reference
+    'aa63-35-187-102-57.ngrok-free.app',
+    '83d5-35-190-204-197.ngrok-free.app',
+    '62f9-34-78-238-122.ngrok-free.app',
     'd2fa-34-38-160-61.ngrok-free.app',
     '940d-34-38-255-246.ngrok-free.app',
     '5cb0-35-195-126-127.ngrok-free.app',
+    'a7b0-35-187-102-57.ngrok-free.app',
+    '5296-35-189-243-3.ngrok-free.app',
+    '9903-35-189-243-3.ngrok-free.app',
+    'fcc0-35-189-243-3.ngrok-free.app',  # Corrected
     '*.cloudshell.dev',
     '8000-cs-1045846920909-default.cs-europe-west1-iuzs.cloudshell.dev',
 ]
+
 CSRF_TRUSTED_ORIGINS = [
     'http://localhost:8000',
     'https://*.ngrok-free.app',
-    'https://83d5-35-190-204-197.ngrok-free.app',  # New URL
-    'https://62f9-34-78-238-122.ngrok-free.app',   # Keep old
+    'https://fcc0-35-189-243-3.ngrok-free.app',
+    'https://5296-35-189-243-3.ngrok-free.app',
     'https://d2fa-34-38-160-61.ngrok-free.app',
-    'https://5cb0-35-195-126-127.ngrok-free.app',
-    'https://940d-34-38-255-246.ngrok-free.app',
+    'https://9903-35-189-243-3.ngrok-free.app',
     'https://*.cloudshell.dev',
-    'https://8000-cs-1045846920909-default.cs-europe-west1-iuzs.cloudshell.dev',
 ]
 INSTALLED_APPS = [
     'django.contrib.admin',

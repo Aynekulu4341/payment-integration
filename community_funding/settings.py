@@ -1,46 +1,19 @@
 from pathlib import Path
+from decouple import config
 import os
-from dotenv import load_dotenv
 
+# Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-load_dotenv(os.path.join(BASE_DIR, '.env'))
+# SECURITY WARNING: keep the secret key used in production secret!
+SECRET_KEY = config('SECRET_KEY')
 
-PAYPAL_CLIENT_ID = os.getenv('PAYPAL_CLIENT_ID')
-PAYPAL_CLIENT_SECRET = os.getenv('PAYPAL_CLIENT_SECRET')
-EXCHANGE_RATE_API_KEY = os.getenv('EXCHANGE_RATE_API_KEY')
-
-SECRET_KEY = 'django-insecure-your-secret-key-here'
-
+# SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = [
-    'localhost',
-    '127.0.0.1',
-    '*.ngrok-free.app',
-    'aa63-35-187-102-57.ngrok-free.app',
-    '83d5-35-190-204-197.ngrok-free.app',
-    '62f9-34-78-238-122.ngrok-free.app',
-    'd2fa-34-38-160-61.ngrok-free.app',
-    '940d-34-38-255-246.ngrok-free.app',
-    '5cb0-35-195-126-127.ngrok-free.app',
-    'a7b0-35-187-102-57.ngrok-free.app',
-    '5296-35-189-243-3.ngrok-free.app',
-    '9903-35-189-243-3.ngrok-free.app',
-    'fcc0-35-189-243-3.ngrok-free.app',  # Corrected
-    '*.cloudshell.dev',
-    '8000-cs-1045846920909-default.cs-europe-west1-iuzs.cloudshell.dev',
-]
+ALLOWED_HOSTS = ['beko41.pythonanywhere.com', '127.0.0.1', 'localhost']
 
-CSRF_TRUSTED_ORIGINS = [
-    'http://localhost:8000',
-    'https://*.ngrok-free.app',
-    'https://fcc0-35-189-243-3.ngrok-free.app',
-    'https://5296-35-189-243-3.ngrok-free.app',
-    'https://d2fa-34-38-160-61.ngrok-free.app',
-    'https://9903-35-189-243-3.ngrok-free.app',
-    'https://*.cloudshell.dev',
-]
+# Application definition
 INSTALLED_APPS = [
     'django.contrib.admin',
     'django.contrib.auth',
@@ -48,8 +21,8 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'payments.apps.PaymentsConfig',
     'rest_framework',
-    'payments',
 ]
 
 MIDDLEWARE = [
@@ -67,7 +40,7 @@ ROOT_URLCONF = 'community_funding.urls'
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
+        'DIRS': [BASE_DIR / 'templates'],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
@@ -82,6 +55,7 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'community_funding.wsgi.application'
 
+# Database
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
@@ -89,6 +63,7 @@ DATABASES = {
     }
 }
 
+# Password validation
 AUTH_PASSWORD_VALIDATORS = [
     {
         'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator',
@@ -104,37 +79,68 @@ AUTH_PASSWORD_VALIDATORS = [
     },
 ]
 
+# Internationalization
 LANGUAGE_CODE = 'en-us'
-TIME_ZONE = 'UTC'
+TIME_ZONE = 'Africa/Addis_Ababa'
 USE_I18N = True
 USE_TZ = True
 
+# Static files (CSS, JavaScript, Images)
 STATIC_URL = '/static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'
 
-DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
-
-CSRF_TRUSTED_ORIGINS = [
-    'http://localhost:8000',
-    'https://d2fa-34-38-160-61.ngrok-free.app',
-    'https://*.ngrok-free.app',
-    'https://*.cloudshell.dev',
-]
-
+# Media files
+MEDIA_URL = '/media/'
+MEDIA_ROOT = BASE_DIR / 'media'
+LOGIN_REDIRECT_URL = '/accounts/profile/'
+LOGIN_URL = '/accounts/login/'
+LOGOUT_REDIRECT_URL = None
+# Logging configuration
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,
+    'formatters': {
+        'verbose': {
+            'format': '{levelname} {asctime} {module} {message}',
+            'style': '{',
+        },
+    },
     'handlers': {
         'file': {
             'level': 'DEBUG',
             'class': 'logging.FileHandler',
             'filename': BASE_DIR / 'debug.log',
+            'formatter': 'verbose',
+        },
+        'console': {
+            'level': 'INFO',
+            'class': 'logging.StreamHandler',
+            'formatter': 'verbose',
         },
     },
     'loggers': {
-        'django': {
-            'handlers': ['file'],
+        '': {
+            'handlers': ['file', 'console'],
             'level': 'DEBUG',
             'propagate': True,
         },
     },
 }
+
+# Payment and API settings
+PAYPAL_CLIENT_ID = config('PAYPAL_CLIENT_ID')
+PAYPAL_CLIENT_SECRET = config('PAYPAL_CLIENT_SECRET')
+EXCHANGE_RATE_API_KEY = config('EXCHANGE_RATE_API_KEY')
+CHAPA_TEST_PUBLIC_KEY = config('CHAPA_TEST_PUBLIC_KEY')
+CHAPA_TEST_SECRET_KEY = config('CHAPA_TEST_SECRET_KEY')
+CHAPA_TEST_CALLBACK_URL = config('CHAPA_TEST_CALLBACK_URL')
+SITE_URL = config('SITE_URL')
+
+# REST Framework settings
+REST_FRAMEWORK = {
+    'DEFAULT_PERMISSION_CLASSES': [],
+    'DEFAULT_AUTHENTICATION_CLASSES': [],
+}
+
+# Default primary key field type
+DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'

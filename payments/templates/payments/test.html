@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Donate to Campaign</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+        }
+        .form-container {
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+        }
+        .form-container label, .form-container input, .form-container select, .form-container button {
+            display: block;
+            width: 100%;
+            margin-bottom: 10px;
+        }
+        .form-container button {
+            background-color: #4CAF50;
+            color: white;
+            padding: 10px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        .message {
+            margin-top: 20px;
+            padding: 10px;
+            border-radius: 5px;
+        }
+        .success {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .error {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        .campaign-list {
+            margin-top: 20px;
+        }
+        .campaign-item {
+            padding: 10px;
+            border-bottom: 1px solid #ccc;
+        }
+    </style>
+</head>
+<body>
+    <div class="form-container">
+        <h2>Donate to a Campaign</h2>
+        <form method="post" action="{% url 'donate' %}">
+            {% csrf_token %}
+            <label for="campaign_id">Campaign ID:</label>
+            <input type="number" id="campaign_id" name="campaign_id" required>
+            <label for="amount">Amount (ETB for Chapa, USD for PayPal):</label>
+            <input type="number" id="amount" name="amount" step="0.01" required>
+            <label for="payment_method">Payment Method:</label>
+            <select id="payment_method" name="payment_method" required>
+                <option value="chapa">Chapa</option>
+                <option value="paypal">PayPal</option>
+            </select>
+            <label for="donor_email">Donor Email (required for PayPal):</label>
+            <input type="email" id="donor_email" name="donor_email" required>
+            <button type="submit">Donate</button>
+        </form>
+        <form method="post" action="{% url 'withdraw' %}">
+    {% csrf_token %}
+    <label for="campaign_id">Campaign ID:</label><input type="text" name="campaign_id" required><br>
+    <label for="amount">Amount:</label><input type="text" name="amount" required><br>
+    <label for="payment_method">Payment Method:</label>
+    <select name="payment_method" required>
+        <option value="paypal">PayPal</option>
+        <option value="chapa">Chapa</option>
+    </select><br>
+    <label for="recipient_email">Recipient Email (for PayPal):</label><input type="email" name="recipient_email"><br>
+    <label for="convert_to">Convert To:</label>
+    <select name="convert_to" required>
+        <option value="birr">ETB</option>
+        <option value="usd">USD</option>
+    </select><br>
+    <button type="submit">Withdraw</button>
+</form>
+
+        {% if chapa_message %}
+            <div class="message success">
+                {{ chapa_message }}
+            </div>
+        {% endif %}
+        {% if paypal_message %}
+            <div class="message success">
+                {{ paypal_message }}
+            </div>
+        {% endif %}
+        {% if chapa_error %}
+            <div class="message error">
+                {{ chapa_error }}
+            </div>
+        {% endif %}
+        {% if paypal_error %}
+            <div class="message error">
+                {{ paypal_error }}
+            </div>
+        {% endif %}
+        {% if campaign_message %}
+            <div class="message success">
+                {{ campaign_message }}
+            </div>
+        {% endif %}
+        {% if campaign_error %}
+            <div class="message error">
+                {{ campaign_error }}
+            </div>
+        {% endif %}
+        {% if withdrawal_message %}
+            <div class="message success">
+                {{ withdrawal_message }}
+            </div>
+        {% endif %}
+        {% if withdrawal_error %}
+            <div class="message error">
+                {{ withdrawal_error }}
+            </div>
+        {% endif %}
+
+        <div class="campaign-list">
+            <h3>Available Campaigns</h3>
+            {% for campaign in campaigns %}
+                <div class="campaign-item">
+                    <strong>ID:</strong> {{ campaign.id }}<br>
+                    <strong>Title:</strong> {{ campaign.title }}<br>
+                    <strong>Goal:</strong> {{ campaign.goal }} ETB<br>
+                    <strong>Total Birr:</strong> {{ campaign.total_birr }} ETB<br>
+                    <strong>Total USD:</strong> {{ campaign.total_usd }} USD<br>
+                    <strong>Balance (Birr):</strong> {{ campaign.get_balance_in_birr }} ETB<br>
+                    <strong>Percentage Funded:</strong> {{ campaign.get_percentage_funded }}%
+                </div>
+            {% empty %}
+                <p>No campaigns available.</p>
+            {% endfor %}
+        </div>
+    </div>
+</body>
+</html>

@@ -1,9 +1,7 @@
-from django.contrib import admin
 from django.urls import path, include
-from . import views
+from django.contrib import admin  # Add this import
 
 urlpatterns = [
-    path('', views.home, name='home'),
     path('admin/', admin.site.urls),
-    path('api/', include('payments.urls')),
+    path('', include('payments.urls')),  # Include payments URLs under root
 ]

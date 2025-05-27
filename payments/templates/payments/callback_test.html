@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Callback Test Page</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .section { margin-bottom: 20px; }
+        .section h2 { color: #333; }
+        form { margin: 10px 0; }
+        button, input[type="submit"] { padding: 5px 10px; margin-top: 5px; }
+        .message { color: green; }
+        .error { color: red; }
+    </style>
+</head>
+<body>
+    <h1>Callback Test Page</h1>
+
+    <!-- Trigger Callback -->
+    <div class="section">
+        <h2>Trigger Payment Callback</h2>
+        <form method="post" action="{% url 'payment_callback' %}">
+            {% csrf_token %}
+            <label>Transaction ID: <input type="text" name="transaction_id" value="TEL-<timestamp>" required></label><br>
+            <input type="submit" value="Trigger Callback">
+        </form>
+        {% if callback_message %}
+            <p class="message">{{ callback_message }}</p>
+        {% endif %}
+        {% if callback_error %}
+            <p class="error">{{ callback_error }}</p>
+        {% endif %}
+    </div>
+
+    <p><a href="{% url 'test_page' %}">Back to Test Page</a></p>
+    <p><a href="{% url 'admin:index' %}">Go to Admin Panel</a></p>
+</body>
+</html>

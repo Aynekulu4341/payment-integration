@@ -1,5 +1,9 @@
-from django.http import HttpResponse
+from django.shortcuts import render
+from django.urls import reverse
+from django.http import HttpResponseRedirect
+from django.utils.decorators import method_decorator
 from django.conf import settings
+from django.contrib.auth.decorators import login_required
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
@@ -14,127 +18,226 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-FAKE_TELEBIRR_ACCOUNTS = [
-    {"phone": "251912345678", "name": "Abebe Kebede", "balance": Decimal('1000.00')},
-    {"phone": "251989941044", "name": "Marta Tesfaye", "balance": Decimal('50.00')},
-    {"phone": "251923456789", "name": "Yared Alemayehu", "balance": Decimal('750.00')},
-]
+def validate_amount(amount):
+    """Validate that the amount is a positive number."""
+    try:
+        amount = float(amount)
+        if amount <= 0:
+            raise ValueError
+        return Decimal(str(amount)).quantize(Decimal('0.01')), None
+    except (ValueError, TypeError):
+        return None, "Amount must be a positive number greater than 0."
 
-def simulate_telebirr_payment(amount, donor_phone):
-    amount = Decimal(str(amount)).quantize(Decimal('0.01'))
-    donor = next((acc for acc in FAKE_TELEBIRR_ACCOUNTS if acc["phone"] == donor_phone), None)
-    if not donor:
-        return {'success': False, 'message': f"Telebirr account {donor_phone} not found!"}
-    if donor["balance"] < amount:
-        return {'success': False, 'message': f"Insufficient balance in {donor_phone}! Only {donor['balance']} ETB available."}
-    transaction_id = f"TEL-{int(time.time())}"
-    donor["balance"] -= amount
-    logger.debug(f"Updated Telebirr accounts: {FAKE_TELEBIRR_ACCOUNTS}")
-    return {
-        'success': True,
-        'transaction_id': transaction_id,
-        'redirect_url': "http://localhost:8000/success",
-        'source': f"Telebirr account {donor_phone} ({donor['name']})"
+def initiate_chapa_payment(amount, campaign_id):
+    """Initiate a Chapa payment without requiring phone number."""
+    amount_val, amount_error = validate_amount(amount)
+    if amount_error:
+        logger.error(f"Chapa validation error: {amount_error}")
+        return {'success': False, 'message': amount_error}
+
+    amount_str = f"{amount_val:.2f}"
+
+    if not settings.SITE_URL.startswith('https://'):
+        logger.error(f"Invalid SITE_URL: {settings.SITE_URL}. Must use HTTPS.")
+        return {'success': False, 'message': 'Server configuration error: SITE_URL must use HTTPS.'}
+
+    url = "https://api.chapa.co/v1/transaction/initialize"
+    headers = {
+        "Authorization": f"Bearer {settings.CHAPA_TEST_SECRET_KEY}",
+        "Content-Type": "application/json"
     }
+    payload = {
+        "amount": amount_str,
+        "currency": "ETB",
+        "email": "esa414288@gmail.com",
+        "first_name": "Test",
+        "last_name": "User",
+        "tx_ref": f"CHAPA-{int(time.time())}-{campaign_id}",
+        "callback_url": f"{settings.SITE_URL}/api/callback/chapa/",
+        "return_url": f"{settings.SITE_URL}/api/callback/chapa/?campaign_id={campaign_id}"  # Pass campaign_id in return_url
+    }
+    try:
+        logger.debug(f"Sending Chapa request with payload: {payload}")
+        response = requests.post(url, headers=headers, json=payload)
+        response.raise_for_status()
+        data = response.json()
+        logger.debug(f"Chapa API response: {data}")
+        if data.get('status') == 'success' and data.get('data') and data['data'].get('checkout_url'):
+            return {
+                'success': True,
+                'checkout_url': data['data']['checkout_url'],
+                'transaction_id': data['data'].get('tx_ref', payload['tx_ref'])
+            }
+        logger.error(f"Chapa API returned failure: {data.get('message', 'Unknown error')}")
+        return {'success': False, 'message': data.get('message', 'Payment initialization failed')}
+    except requests.RequestException as e:
+        logger.error(f"Chapa payment initialization failed: {str(e)}")
+        if e.response is not None:
+            logger.error(f"Chapa error response: {e.response.text}")
+        return {'success': False, 'message': f'Failed to connect to Chapa: {str(e)}'}
 
-def simulate_telebirr_verify(transaction_id):
-    logger.debug(f"Verifying Telebirr transaction: {transaction_id}")
-    return {'success': True, 'message': "Verified payment from Telebirr account"}
-
-def simulate_telebirr_transfer(amount, recipient_phone):
-    recipient = next((acc for acc in FAKE_TELEBIRR_ACCOUNTS if acc["phone"] == recipient_phone), None)
-    if recipient:
-        recipient["balance"] += amount
-        logger.debug(f"Simulated Telebirr transfer: {amount} ETB to {recipient_phone}. New balance: {recipient['balance']}")
-        print(f"Telebirr account {recipient_phone} balance: {recipient['balance']} ETB")
-        return {'success': True, 'message': f"Transferred {amount} ETB to {recipient_phone}"}
-    return {'success': False, 'message': f"Recipient {recipient_phone} not found!"}
+def verify_chapa_payment(transaction_id):
+    """Verify a Chapa payment."""
+    url = f"https://api.chapa.co/v1/transaction/verify/{transaction_id}"
+    headers = {
+        "Authorization": f"Bearer {settings.CHAPA_TEST_SECRET_KEY}",
+        "Content-Type": "application/json"
+    }
+    try:
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
+        data = response.json()
+        logger.debug(f"Chapa verification response: {data}")
+        if data.get('status') == 'success' and data['data'].get('status') == 'success':
+            amount = Decimal(data['data'].get('amount', '0.00'))
+            return {'success': True, 'amount': amount, 'message': 'Payment verified'}
+        logger.error(f"Chapa verification failed: {data.get('message', 'Payment not successful')}")
+        return {'success': False, 'message': data.get('message', 'Payment not successful')}
+    except requests.RequestException as e:
+        logger.error(f"Chapa payment verification failed: {str(e)}")
+        return {'success': False, 'message': f'Failed to verify payment: {str(e)}'}
 
 def simulate_paypal_transfer(amount, recipient_email):
+    """Simulate a PayPal transfer."""
     logger.debug(f"Simulated PayPal transfer: {amount} USD to {recipient_email}")
     return {'success': True, 'message': f"Transferred {amount} USD to {recipient_email}"}
 
+def test_page(request):
+    """Render the test page with campaign data."""
+    campaigns = Campaign.objects.all()
+    context = {
+        'campaigns': campaigns,
+        'campaign_message': request.session.pop('campaign_message', None),
+        'campaign_error': request.session.pop('campaign_error', None),
+        'chapa_message': request.session.pop('chapa_message', None),
+        'chapa_error': request.session.pop('chapa_error', None),
+        'paypal_message': request.session.pop('paypal_message', None),
+        'paypal_error': request.session.pop('paypal_error', None),
+        'withdrawal_message': request.session.pop('withdrawal_message', None),
+        'withdrawal_error': request.session.pop('withdrawal_error', None),
+    }
+    return render(request, 'payments/test.html', context)
+
+class CreateCampaignView(APIView):
+    def post(self, request):
+        """Create a new campaign."""
+        logger.debug(f"CreateCampaignView.post called with data: {request.POST}")
+        title = request.POST.get('title', '').strip()
+        description = request.POST.get('description', '')
+        goal = request.POST.get('goal', '').strip()
+
+        if not title or len(title) > 200:
+            logger.error("Invalid title")
+            request.session['campaign_error'] = "Title is required and must not exceed 200 characters."
+            return HttpResponseRedirect(reverse('test_page'))
+
+        goal_val, goal_error = validate_amount(goal)
+        if goal_error:
+            logger.error(f"Invalid goal amount: {goal_error}")
+            request.session['campaign_error'] = goal_error
+            return HttpResponseRedirect(reverse('test_page'))
+
+        try:
+            campaign = Campaign.objects.create(
+                title=title,
+                description=description,
+                goal=goal_val,
+                total_usd=Decimal('0.00'),
+                total_birr=Decimal('0.00'),
+                creator=request.user if request.user.is_authenticated else None
+            )
+            logger.debug(f"Created campaign: {campaign.id}")
+            request.session['campaign_message'] = f"Campaign '{title}' created successfully!"
+            return HttpResponseRedirect(reverse('test_page'))
+        except Exception as e:
+            logger.error(f"Failed to create campaign: {str(e)}")
+            request.session['campaign_error'] = f"Error creating campaign: {str(e)}"
+            return HttpResponseRedirect(reverse('test_page'))
+
 class CampaignListView(APIView):
     def get(self, request):
-        """List all campaigns with their progress in Birr."""
+        """List all campaigns."""
         campaigns = Campaign.objects.all()
         serializer = CampaignSerializer(campaigns, many=True)
         return Response(serializer.data)
 
 class CampaignDetailView(APIView):
     def get(self, request, pk):
-        """Get detailed view of a campaign with total_birr and total_usd."""
+        """Get details of a specific campaign."""
         try:
             campaign = Campaign.objects.get(pk=pk)
+            serializer = CampaignSerializer(campaign)
+            return Response(serializer.data)
         except Campaign.DoesNotExist:
             logger.error(f"Campaign {pk} not found")
             return Response({"error": "Campaign not found"}, status=status.HTTP_404_NOT_FOUND)
-        serializer = CampaignSerializer(campaign)
-        return Response(serializer.data)
 
 class DonateView(APIView):
     def post(self, request):
-        logger.debug(f"DonateView.post called with data: {request.data}")
-        data = request.data
-        campaign_id = data.get('campaign_id')
-        amount = data.get('amount')
-        payment_method = data.get('payment_method')
-        donor_phone = data.get('donor_phone')
-        donor_email = data.get('donor_email')
+        logger.debug(f"DonateView.post called with data: {request.POST}")
+        data = request.POST
+        campaign_id = data.get('campaign_id', '').strip()
+        amount = data.get('amount', '').strip()
+        payment_method = data.get('payment_method', '').strip()
+        donor_email = data.get('donor_email', '').strip()
 
-        missing = []
-        if not campaign_id:
-            missing.append('campaign_id')
-        if not amount:
-            missing.append('amount')
-        if not payment_method:
-            missing.append('payment_method')
-        if payment_method == 'telebirr' and not donor_phone:
-            missing.append('donor_phone')
-        if missing:
-            logger.error(f"Missing required fields: {', '.join(missing)}")
-            return HttpResponse(f"Oops! Please provide {', '.join(missing)}.", status=400)
+        if not campaign_id or not amount or not payment_method:
+            logger.error("Missing required fields: campaign_id, amount, or payment_method")
+            error_key = 'chapa_error' if payment_method == 'chapa' else 'paypal_error'
+            request.session[error_key] = "Please provide campaign ID, amount, and payment method."
+            return HttpResponseRedirect(reverse('test_page'))
 
-        try:
-            amount = float(amount)
-            if amount <= 0:
-                raise ValueError
-        except (ValueError, TypeError):
-            logger.error("Invalid amount provided")
-            return HttpResponse("Sorry, the amount must be a positive number!", status=400)
+        amount_val, amount_error = validate_amount(amount)
+        if amount_error:
+            logger.error(f"Invalid amount: {amount_error}")
+            error_key = 'chapa_error' if payment_method == 'chapa' else 'paypal_error'
+            request.session[error_key] = amount_error
+            return HttpResponseRedirect(reverse('test_page'))
 
         try:
-            campaign = Campaign.objects.get(id=campaign_id)
-        except Campaign.DoesNotExist:
+            campaign = Campaign.objects.get(id=int(campaign_id))
+        except (Campaign.DoesNotExist, ValueError):
             logger.error(f"Campaign {campaign_id} not found")
-            return HttpResponse("Hmm, that campaign doesn’t exist.", status=404)
+            error_key = 'chapa_error' if payment_method == 'chapa' else 'paypal_error'
+            request.session[error_key] = "Hmm, that campaign doesn’t exist."
+            return HttpResponseRedirect(reverse('test_page'))
 
-        if payment_method not in ['paypal', 'telebirr']:
+        if payment_method not in ['paypal', 'chapa']:
             logger.error(f"Invalid payment method: {payment_method}")
-            return HttpResponse("Please choose either PayPal or Telebirr!", status=400)
+            error_key = 'chapa_error' if payment_method == 'chapa' else 'paypal_error'
+            request.session[error_key] = "Please choose either PayPal or Chapa!"
+            return HttpResponseRedirect(reverse('test_page'))
+
+        if payment_method == 'paypal' and not donor_email:
+            logger.error("Missing donor email for PayPal")
+            request.session['paypal_error'] = "Please provide a donor email for PayPal."
+            return HttpResponseRedirect(reverse('test_page'))
 
         if payment_method == 'paypal':
-            return self.initiate_paypal_payment(campaign, amount, request, donor_email)
-        elif payment_method == 'telebirr':
-            result = simulate_telebirr_payment(amount, donor_phone)
+            return self.initiate_paypal_payment(campaign, amount_val, request, donor_email)
+        elif payment_method == 'chapa':
+            result = initiate_chapa_payment(amount_val, campaign_id)
+            logger.debug(f"Chapa payment initiation result: {result}")
             if result['success']:
                 transaction = Transaction.objects.create(
                     campaign=campaign,
-                    amount=amount,
-                    payment_method='telebirr',
-                    transaction_id=result['transaction_id'],
-                    donor_phone=donor_phone
+                    amount=amount_val,
+                    payment_method='chapa',
+                    transaction_id=result['transaction_id']
                 )
-                logger.debug(f"Created Telebirr transaction: {transaction.transaction_id} for campaign {campaign_id}")
-                return HttpResponse(
-                    f"Great! Your payment ID is {result['transaction_id']}. "
-                    f"Paid from {result['source']}. Go to {result['redirect_url']} to finish!",
-                    status=200
-                )
-            logger.error(f"Telebirr payment failed: {result['message']}")
-            return HttpResponse(f"Sorry, Telebirr payment failed: {result['message']}", status=400)
+                # Store transaction_id in session
+                request.session['chapa_tx_ref'] = result['transaction_id']
+                # Force session save to ensure the session is persisted
+                request.session.modified = True
+                logger.debug(f"Stored chapa_tx_ref in session: {result['transaction_id']}")
+                logger.debug(f"Created Chapa transaction: {transaction.transaction_id} for campaign {campaign_id}")
+                return HttpResponseRedirect(result['checkout_url'])
+            else:
+                request.session['chapa_error'] = result['message']
+                return HttpResponseRedirect(reverse('test_page'))
 
-    def initiate_paypal_payment(self, campaign, amount, request, donor_email=None):
+    def initiate_paypal_payment(self, campaign, amount, request, donor_email):
+        """Initiate a PayPal payment."""
         logger.debug(f"Initiating PayPal payment for campaign {campaign.id}, amount {amount}")
         auth_url = "https://api-m.sandbox.paypal.com/v1/oauth2/token"
         auth_headers = {"Accept": "application/json", "Accept-Language": "en_US"}
@@ -147,12 +250,14 @@ class DonateView(APIView):
         )
         if auth_response.status_code != 200:
             logger.error(f"PayPal auth failed: {auth_response.text}")
-            return HttpResponse(f"Oh no! PayPal isn’t working right now. Error: {auth_response.text}", status=auth_response.status_code)
+            request.session['paypal_error'] = f"Oh no! PayPal isn’t working right now. Error: {auth_response.text}"
+            return HttpResponseRedirect(reverse('test_page'))
 
         token = auth_response.json().get("access_token")
         if not token:
             logger.error("No PayPal access token received")
-            return HttpResponse("Sorry, we couldn’t connect to PayPal.", status=500)
+            request.session['paypal_error'] = "Sorry, we couldn’t connect to PayPal."
+            return HttpResponseRedirect(reverse('test_page'))
 
         order_url = "https://api-m.sandbox.paypal.com/v2/checkout/orders"
         headers = {'Content-Type': 'application/json', 'Authorization': f'Bearer {token}'}
@@ -160,11 +265,11 @@ class DonateView(APIView):
             'intent': 'CAPTURE',
             'purchase_units': [{
                 'amount': {'currency_code': 'USD', 'value': f"{amount:.2f}"},
-                'custom_id': donor_email or 'anonymous'
+                'custom_id': donor_email
             }],
             'application_context': {
-                'return_url': f'{request.scheme}://{request.get_host()}/api/callback/paypal',
-                'cancel_url': f'{request.scheme}://{request.get_host()}/cancel'
+                'return_url': f'{settings.SITE_URL}/api/callback/paypal/',
+                'cancel_url': f'{settings.SITE_URL}/cancel/'
             }
         }
         response = requests.post(order_url, headers=headers, json=payload)
@@ -179,46 +284,186 @@ class DonateView(APIView):
             )
             logger.debug(f"Created PayPal transaction: {transaction.transaction_id} for campaign {campaign.id}")
             redirect_url = next(link['href'] for link in data['links'] if link['rel'] == 'approve')
-            return HttpResponse(f"Great! Your payment ID is {data['id']}. Go to {redirect_url} to finish!", status=200)
+            return HttpResponseRedirect(redirect_url)
         logger.error(f"PayPal order creation failed: {response.text}")
-        return HttpResponse(f"Oops! Something went wrong with PayPal: {response.text}", status=response.status_code)
+        request.session['paypal_error'] = f"Oops! Something went wrong with PayPal: {response.text}"
+        return HttpResponseRedirect(reverse('test_page'))
 
-class PaymentCallbackView(APIView):
+class ChapaCallbackView(APIView):
     def post(self, request):
-        logger.debug(f"PaymentCallbackView.post called with data: {request.data}")
-        transaction_id = request.data.get('transaction_id')
+        """Handle Chapa payment callback (POST from Chapa)."""
+        logger.debug(f"ChapaCallbackView.post called with data: {request.POST}")
+        transaction_id = request.POST.get('tx_ref')
         if not transaction_id:
-            logger.error("No transaction ID provided in callback")
-            return HttpResponse("Please tell us the transaction ID!", status=400)
+            logger.error("No transaction ID provided in Chapa callback")
+            return Response({"error": "Missing transaction ID"}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
             transaction = Transaction.objects.get(transaction_id=transaction_id)
         except Transaction.DoesNotExist:
             logger.error(f"Transaction {transaction_id} not found")
-            return HttpResponse("We couldn’t find that transaction.", status=404)
+            return Response({"error": "Transaction not found"}, status=status.HTTP_404_NOT_FOUND)
 
         if transaction.completed:
             logger.debug(f"Transaction {transaction_id} already completed")
-            return HttpResponse("This payment is already done!", status=200)
+            return Response({"message": "Payment already processed"}, status=status.HTTP_200_OK)
 
-        if transaction.payment_method == 'paypal':
-            return self.verify_paypal_payment(transaction, request)
-        elif transaction.payment_method == 'telebirr':
-            result = simulate_telebirr_verify(transaction_id)
-            if result['success']:
-                transaction.completed = True
-                transaction.campaign.total_birr += transaction.amount
-                transaction.campaign.save()
-                transaction.save()
-                logger.info(f"Telebirr payment {transaction_id} completed, updated campaign {transaction.campaign.id} balance: {transaction.campaign.total_birr} ETB")
-                return HttpResponse(
-                    f"Hooray! Your Telebirr payment is complete! {result['message']}",
-                    status=200
-                )
-            logger.error(f"Telebirr verification failed: {result['message']}")
-            return HttpResponse(f"Telebirr didn’t confirm: {result['message']}", status=400)
+        result = verify_chapa_payment(transaction_id)
+        if result['success']:
+            transaction.completed = True
+            transaction.campaign.total_birr += result['amount']
+            transaction.campaign.save()
+            transaction.save()
+            logger.info(f"Chapa payment {transaction_id} completed, updated campaign {transaction.campaign.id} balance: {transaction.campaign.total_birr} ETB")
+            request.session['chapa_message'] = f"Successful donation of {result['amount']} ETB via Chapa!"
+        else:
+            logger.error(f"Chapa verification failed: {result['message']}")
+            request.session['chapa_error'] = f"Payment verification failed: {result['message']}"
+        return HttpResponseRedirect(reverse('test_page'))
+
+    def get(self, request):
+        """Handle redirect back from Chapa (GET after user approval)."""
+        logger.debug(f"Chapa callback GET request data: {request.GET}")
+        logger.debug(f"Session data: {request.session.items()}")
+        transaction_id = request.GET.get('tx_ref') or request.session.get('chapa_tx_ref')
+        if not transaction_id:
+            # Attempt to find the most recent Chapa transaction for this campaign as a fallback
+            campaign_id = request.GET.get('campaign_id')  # Assuming campaign_id might be passed in the URL
+            if campaign_id:
+                try:
+                    recent_transaction = Transaction.objects.filter(
+                        campaign_id=campaign_id,
+                        payment_method='chapa',
+                        completed=False
+                    ).order_by('-created_at').first()
+                    if recent_transaction:
+                        transaction_id = recent_transaction.transaction_id
+                        logger.debug(f"Fallback: Found recent Chapa transaction {transaction_id} for campaign {campaign_id}")
+                except Exception as e:
+                    logger.error(f"Error finding recent transaction: {str(e)}")
+
+        if not transaction_id:
+            logger.error("No transaction ID provided in Chapa callback GET or session, even after fallback")
+            request.session['chapa_error'] = "Missing transaction ID in Chapa callback. Please try again."
+            return HttpResponseRedirect(reverse('test_page'))
+
+        try:
+            transaction = Transaction.objects.get(transaction_id=transaction_id)
+        except Transaction.DoesNotExist:
+            logger.error(f"Transaction {transaction_id} not found")
+            request.session['chapa_error'] = "Transaction not found."
+            return HttpResponseRedirect(reverse('test_page'))
+
+        if transaction.completed:
+            logger.debug(f"Transaction {transaction_id} already completed")
+            request.session['chapa_message'] = "Payment already processed."
+            if 'chapa_tx_ref' in request.session:
+                del request.session['chapa_tx_ref']
+                request.session.modified = True
+            return HttpResponseRedirect(reverse('test_page'))
+
+        result = verify_chapa_payment(transaction_id)
+        if result['success']:
+            transaction.completed = True
+            transaction.campaign.total_birr += result['amount']
+            transaction.campaign.save()
+            transaction.save()
+            logger.info(f"Chapa payment {transaction_id} completed, updated campaign {transaction.campaign.id} balance: {transaction.campaign.total_birr} ETB")
+            request.session['chapa_message'] = f"Successful donation of {result['amount']} ETB via Chapa!"
+        else:
+            logger.error(f"Chapa verification failed in GET: {result['message']}")
+            request.session['chapa_error'] = f"Payment verification failed: {result['message']}"
+        if 'chapa_tx_ref' in request.session:
+            del request.session['chapa_tx_ref']
+            request.session.modified = True
+        return HttpResponseRedirect(reverse('test_page'))
+
+class PayPalCallbackView(APIView):
+    def post(self, request):
+        """Handle PayPal payment callback (IPN or webhook)."""
+        logger.debug(f"PayPalCallbackView.post called with data: {request.data}")
+        transaction_id = request.data.get('transaction_id') or request.data.get('id')
+        if not transaction_id:
+            logger.error("No transaction ID provided in PayPal callback")
+            request.session['paypal_error'] = "Missing transaction ID in PayPal callback."
+            return HttpResponseRedirect(reverse('test_page'))
+
+        try:
+            transaction = Transaction.objects.get(transaction_id=transaction_id)
+        except Transaction.DoesNotExist:
+            logger.error(f"Transaction {transaction_id} not found")
+            request.session['paypal_error'] = "Transaction not found."
+            return HttpResponseRedirect(reverse('test_page'))
+
+        if transaction.completed:
+            logger.debug(f"Transaction {transaction_id} already completed")
+            request.session['paypal_message'] = "Payment already processed."
+            return HttpResponseRedirect(reverse('test_page'))
+
+        return self.verify_paypal_payment(transaction, request)
+
+    def get(self, request):
+        """Handle PayPal payment redirect after approval."""
+        logger.debug(f"PayPal callback GET request data: {request.GET}")
+        token = request.GET.get('token')
+        if not token:
+            logger.error("No token provided in PayPal callback")
+            request.session['paypal_error'] = "Missing token in PayPal callback."
+            return HttpResponseRedirect(reverse('test_page'))
+
+        # Fetch order details using the token
+        auth_url = "https://api-m.sandbox.paypal.com/v1/oauth2/token"
+        auth_headers = {"Accept": "application/json", "Accept-Language": "en_US"}
+        auth_data = {"grant_type": "client_credentials"}
+        auth_response = requests.post(
+            auth_url,
+            auth=(settings.PAYPAL_CLIENT_ID, settings.PAYPAL_CLIENT_SECRET),
+            headers=auth_headers,
+            data=auth_data
+        )
+        if auth_response.status_code != 200:
+            logger.error(f"PayPal auth failed: {auth_response.text}")
+            request.session['paypal_error'] = f"PayPal auth failed: {auth_response.text}"
+            return HttpResponseRedirect(reverse('test_page'))
+
+        access_token = auth_response.json().get("access_token")
+        if not access_token:
+            logger.error("No PayPal access token received")
+            request.session['paypal_error'] = "No PayPal access token received."
+            return HttpResponseRedirect(reverse('test_page'))
+
+        # Use the token to get the order ID
+        order_url = f"https://api-m.sandbox.paypal.com/v2/checkout/orders/{token}"
+        headers = {'Content-Type': 'application/json', 'Authorization': f'Bearer {access_token}'}
+        order_response = requests.get(order_url, headers=headers)
+        if order_response.status_code != 200:
+            logger.error(f"PayPal order fetch failed: {order_response.text}")
+            request.session['paypal_error'] = f"PayPal order fetch failed: {order_response.text}"
+            return HttpResponseRedirect(reverse('test_page'))
+
+        order_data = order_response.json()
+        transaction_id = order_data.get('id')
+        if not transaction_id:
+            logger.error("No transaction ID in PayPal order data")
+            request.session['paypal_error'] = "No transaction ID in PayPal order data."
+            return HttpResponseRedirect(reverse('test_page'))
+
+        try:
+            transaction = Transaction.objects.get(transaction_id=transaction_id)
+        except Transaction.DoesNotExist:
+            logger.error(f"Transaction {transaction_id} not found")
+            request.session['paypal_error'] = "Transaction not found."
+            return HttpResponseRedirect(reverse('test_page'))
+
+        if transaction.completed:
+            logger.debug(f"Transaction {transaction_id} already completed")
+            request.session['paypal_message'] = "Payment already processed."
+            return HttpResponseRedirect(reverse('test_page'))
+
+        return self.verify_paypal_payment(transaction, request)
 
     def verify_paypal_payment(self, transaction, request):
+        """Verify a PayPal payment."""
         logger.debug(f"Verifying PayPal payment for transaction {transaction.transaction_id}")
         auth_url = "https://api-m.sandbox.paypal.com/v1/oauth2/token"
         auth_headers = {"Accept": "application/json", "Accept-Language": "en_US"}
@@ -231,191 +476,109 @@ class PaymentCallbackView(APIView):
         )
         if auth_response.status_code != 200:
             logger.error(f"PayPal auth failed: {auth_response.text}")
-            return HttpResponse(f"PayPal isn’t responding right now. Error: {auth_response.text}", status=auth_response.status_code)
+            request.session['paypal_error'] = f"PayPal auth failed: {auth_response.text}"
+            return HttpResponseRedirect(reverse('test_page'))
 
         token = auth_response.json().get("access_token")
         if not token:
             logger.error("No PayPal access token received")
-            return HttpResponse("We couldn’t talk to PayPal.", status=500)
+            request.session['paypal_error'] = "No PayPal access token received."
+            return HttpResponseRedirect(reverse('test_page'))
 
         url = f"https://api-m.sandbox.paypal.com/v2/checkout/orders/{transaction.transaction_id}/capture"
         headers = {'Content-Type': 'application/json', 'Authorization': f'Bearer {token}'}
         response = requests.post(url, headers=headers)
         if response.status_code == 201:
+            data = response.json()
             transaction.completed = True
             transaction.campaign.total_usd += transaction.amount
             transaction.campaign.save()
             transaction.save()
             logger.info(f"PayPal payment {transaction.transaction_id} completed, updated campaign {transaction.campaign.id} balance: {transaction.campaign.total_usd} USD")
-            return HttpResponse("Hooray! Your PayPal payment is complete!", status=200)
+            request.session['paypal_message'] = f"Successful donation via PayPal! Amount: ${transaction.amount:.2f}"
         elif response.status_code == 422:
             logger.error(f"PayPal payment not approved: {response.text}")
-            return HttpResponse(f"Sorry, PayPal says this payment wasn’t approved: {response.text}", status=422)
-        logger.error(f"PayPal capture failed: {response.text}")
-        return HttpResponse(f"Something went wrong with PayPal: {response.text}", status=400)
+            request.session['paypal_error'] = f"PayPal payment not approved: {response.text}"
+        else:
+            logger.error(f"PayPal capture failed: {response.text}")
+            request.session['paypal_error'] = f"PayPal capture failed: {response.text}"
+        return HttpResponseRedirect(reverse('test_page'))
 
+@method_decorator(login_required, name='dispatch')
 class WithdrawView(APIView):
-    def post(self, request):
-        logger.debug(f"WithdrawView.post called with data: {request.data}")
-        data = request.data
-        campaign_id = data.get('campaign_id')
-        payment_method = data.get('payment_method')
-        recipient_phone = data.get('recipient_phone')
-        recipient_email = data.get('recipient_email')
-        withdraw_all = data.get('withdraw_all', False)
-        convert_to = data.get('convert_to', 'birr').lower()
+    def get_exchange_rate(self, from_currency, to_currency):
+        """Fetch exchange rate with retries."""
+        from .utils.exchange_rate import get_exchange_rate
+        api_key = getattr(settings, 'EXCHANGE_RATE_API_KEY', None)
+        return get_exchange_rate(from_currency, to_currency, api_key=api_key)
 
-        missing = []
-        if not campaign_id:
-            missing.append('campaign_id')
-        if not payment_method:
-            missing.append('payment_method')
-        if payment_method == 'telebirr' and not recipient_phone:
-            missing.append('recipient_phone')
-        if payment_method == 'paypal' and not recipient_email:
-            missing.append('recipient_email')
-        if missing:
-            logger.error(f"Missing required fields: {', '.join(missing)}")
-            return HttpResponse(f"Please include {', '.join(missing)}!", status=400)
+    def post(self, request):
+        """Handle withdrawal requests."""
+        logger.debug(f"WithdrawView.post called with data: {request.POST}")
+        data = request.POST
+        campaign_id = data.get('campaign_id', '').strip()
+        payment_method = data.get('payment_method', '').strip()
+        recipient_email = data.get('recipient_email', '').strip()
+        amount = data.get('amount', '').strip()
+        convert_to = data.get('convert_to', 'birr').strip().lower()
 
         try:
+            campaign_id = int(campaign_id)
             campaign = Campaign.objects.get(id=campaign_id)
-        except Campaign.DoesNotExist:
-            logger.error(f"Campaign {campaign_id} not found")
-            return HttpResponse("That campaign isn’t here!", status=404)
+            # Temporarily commented out creator check for testing
+            # if campaign.creator != request.user:
+            #     logger.error(f"User {request.user} is not the creator of campaign {campaign_id}")
+            #     request.session['withdrawal_error'] = "You can only withdraw from campaigns you created."
+            #     return HttpResponseRedirect(reverse('test_page'))
+        except (ValueError, Campaign.DoesNotExist):
+            logger.error(f"Campaign {campaign_id} not found or invalid ID")
+            request.session['withdrawal_error'] = "Hmm, that campaign doesn’t exist or the ID is invalid."
+            return HttpResponseRedirect(reverse('test_page'))
 
-        if payment_method not in ['paypal', 'telebirr']:
+        if payment_method not in ['paypal', 'chapa']:
             logger.error(f"Invalid payment method: {payment_method}")
-            return HttpResponse("Use PayPal or Telebirr, please!", status=400)
+            request.session['withdrawal_error'] = "Please choose either PayPal or Chapa!"
+            return HttpResponseRedirect(reverse('test_page'))
+        if payment_method == 'paypal' and not recipient_email:
+            logger.error("Missing recipient email for PayPal")
+            request.session['withdrawal_error'] = "Please provide a recipient email for PayPal."
+            return HttpResponseRedirect(reverse('test_page'))
 
-        if convert_to not in ['usd', 'birr']:
-            logger.error(f"Invalid conversion currency: {convert_to}")
-            return HttpResponse("Convert to USD or birr, please!", status=400)
+        amount_val, amount_error = validate_amount(amount)
+        if amount_error:
+            logger.error(f"Invalid amount: {amount_error}")
+            request.session['withdrawal_error'] = amount_error
+            return HttpResponseRedirect(reverse('test_page'))
 
-        available_usd = campaign.total_usd
-        available_birr = campaign.total_birr
-        if available_usd <= 0 and available_birr <= 0:
-            logger.error(f"No funds available for campaign {campaign_id}: {available_usd} USD, {available_birr} ETB")
-            return HttpResponse("Not enough funds for that!", status=400)
+        # Get the exchange rate
+        rate = self.get_exchange_rate('USD', 'ETB' if convert_to == 'birr' else 'USD')
+        if rate == 0:
+            rate = 132.1 if convert_to == 'birr' else 0.007571
+            logger.info(f"Using fallback exchange rate {('USD', 'ETB') if convert_to == 'birr' else ('ETB', 'USD')}: {rate}")
 
-        if convert_to == 'usd':
-            rate = self.get_exchange_rate('ETB', 'USD')
-            if rate == 0:
-                rate = 0.007571
-                logger.info("Using fallback exchange rate ETB to USD: 0.007571")
-            total_available_usd = available_usd + (available_birr * Decimal(str(rate)))
-            total_available_usd = total_available_usd.quantize(Decimal('0.01'))
-            if total_available_usd <= 0:
-                logger.error(f"No funds available after conversion to USD for campaign {campaign_id}: {total_available_usd} USD")
-                return HttpResponse("Not enough funds after conversion to USD!", status=400)
-        else:
-            rate = self.get_exchange_rate('USD', 'ETB')
-            if rate == 0:
-                rate = 132.1
-                logger.info("Using fallback exchange rate USD to ETB: 132.1")
-            total_available_birr = available_birr + (available_usd * Decimal(str(rate)))
-            total_available_birr = total_available_birr.quantize(Decimal('0.01'))
-            if total_available_birr <= 0:
-                logger.error(f"No funds available after conversion to birr for campaign {campaign_id}: {total_available_birr} ETB")
-                return HttpResponse("Not enough funds after conversion to birr!", status=400)
+        # Convert requested amount to Birr for comparison
+        amount_in_birr = amount_val * Decimal(str(rate)) if convert_to == 'birr' else amount_val / Decimal(str(rate))
 
-        amount_usd = Decimal('0.00')
-        amount_birr = Decimal('0.00')
+        # Calculate total available balance in Birr (including USD conversion)
+        total_available = campaign.total_birr + (campaign.total_usd * Decimal(str(rate)))
 
-        if withdraw_all:
-            if convert_to == 'usd':
-                amount_usd = total_available_usd
-            else:
-                amount_birr = total_available_birr
-        else:
-            amount = data.get('amount')
-            try:
-                amount = float(amount)
-                if amount <= 0:
-                    raise ValueError
-            except (ValueError, TypeError):
-                logger.error("Invalid amount provided")
-                return HttpResponse("The amount needs to be a positive number!", status=400)
-
-            if convert_to == 'usd':
-                amount_usd = Decimal(str(amount)).quantize(Decimal('0.01'))
-                if amount_usd > total_available_usd:
-                    logger.error(f"Insufficient funds: requested {amount_usd} USD, available {total_available_usd} USD")
-                    return HttpResponse(f"Not enough funds! Requested {amount_usd} USD, but only {total_available_usd} USD available.", status=400)
-            else:
-                amount_birr = Decimal(str(amount)).quantize(Decimal('0.01'))
-                if amount_birr > total_available_birr:
-                    logger.error(f"Insufficient funds: requested {amount_birr} ETB, available {total_available_birr} ETB")
-                    return HttpResponse(f"Not enough funds! Requested {amount_birr} ETB, but only {total_available_birr} ETB available.", status=400)
-
-        if amount_usd == 0 and amount_birr == 0:
-            logger.error("Calculated withdrawal amount is zero")
-            return HttpResponse("Withdrawal amount cannot be zero!", status=400)
+        if total_available < amount_in_birr:
+            logger.error(f"Insufficient funds: requested {amount_in_birr} ETB, available {total_available} ETB")
+            request.session['withdrawal_error'] = f"Not enough funds! Requested {amount_in_birr:.2f} ETB, but only {total_available:.2f} ETB available."
+            return HttpResponseRedirect(reverse('test_page'))
 
         try:
             withdrawal = WithdrawalRequest.objects.create(
                 campaign=campaign,
-                amount_usd=amount_usd,
-                amount_birr=amount_birr,
+                requested_amount=amount_val,
                 payment_method=payment_method,
-                recipient_phone=recipient_phone,
                 recipient_email=recipient_email,
                 convert_to=convert_to
             )
-            logger.debug(f"Withdrawal request created: ID {withdrawal.id}, {amount_usd} USD, {amount_birr} ETB")
-            return HttpResponse(
-                f"Success! Your withdrawal request (ID: {withdrawal.id}) is pending admin approval.",
-                status=201
-            )
+            logger.debug(f"Withdrawal request created: ID {withdrawal.id}, {amount_val} {convert_to.upper()}")
+            request.session['withdrawal_message'] = f"Success! Your withdrawal request (ID: {withdrawal.id}) is pending admin approval."
+            return HttpResponseRedirect(reverse('test_page'))
         except Exception as e:
             logger.error(f"Failed to create withdrawal request: {str(e)}")
-            return HttpResponse(f"Server error: {str(e)}", status=500)
-
-    def get_exchange_rate(self, from_currency, to_currency, retries=3, delay=1):
-        logger.debug(f"Fetching exchange rate from {from_currency} to {to_currency}")
-        api_key = settings.EXCHANGE_RATE_API_KEY
-        if not api_key:
-            logger.error("EXCHANGE_RATE_API_KEY is not set")
-            return 0
-        url = f"https://v6.exchangerate-api.com/v6/{api_key}/latest/{from_currency}"
-
-        session = requests.Session()
-        retries_config = Retry(total=retries, backoff_factor=delay, status_forcelist=[429, 500, 502, 503, 504])
-        session.mount('https://', HTTPAdapter(max_retries=retries_config))
-
-        for attempt in range(retries):
-            try:
-                response = session.get(url, timeout=5)
-                response.raise_for_status()
-                data = response.json()
-                logger.debug(f"Exchange rate API response: {data}")
-
-                if data.get('result') != 'success':
-                    logger.error(f"Exchange rate API error: {data.get('error-type', 'Unknown error')}")
-                    raise ValueError("API returned non-success result")
-
-                rate = data.get('conversion_rates', {}).get(to_currency)
-                if not rate:
-                    logger.error(f"No rate found for {to_currency}")
-                    raise ValueError(f"No rate for {to_currency}")
-
-                logger.debug(f"Exchange rate {from_currency} to {to_currency}: {rate}")
-                return rate
-
-            except (requests.exceptions.RequestException, ValueError) as e:
-                logger.warning(f"Exchange rate fetch failed (attempt {attempt + 1}/{retries}): {str(e)}")
-                if attempt < retries - 1:
-                    time.sleep(delay)
-                continue
-
-        logger.error(f"Failed to fetch exchange rate after {retries} attempts")
-        fallback_rates = {
-            ('ETB', 'USD'): 0.007571,
-            ('USD', 'ETB'): 132.1
-        }
-        rate = fallback_rates.get((from_currency, to_currency))
-        if rate:
-            logger.info(f"Using fallback rate {from_currency} to {to_currency}: {rate}")
-            return rate
-        logger.error("No fallback rate available")
-        return 0
+            request.session['withdrawal_error'] = f"Server error: {str(e)}"
+            return HttpResponseRedirect(reverse('test_page'))

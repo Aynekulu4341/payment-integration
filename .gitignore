@@ -35,3 +35,8 @@ ngrok-*
 
 # macOS
 .DS_Store
+static/
+staticfiles/
+templates/
+wsgi.py
+*.bak

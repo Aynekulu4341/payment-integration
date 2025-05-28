@@ -55,7 +55,8 @@ class WithdrawalRequestAdmin(admin.ModelAdmin):
 
     def get_exchange_rate(self, from_currency, to_currency):
         from .utils.exchange_rate import get_exchange_rate
-        return get_exchange_rate(from_currency, to_currency)
+        api_key = getattr(settings, 'EXCHANGE_RATE_API_KEY', None)
+        return get_exchange_rate(from_currency, to_currency, api_key=api_key)
 
     def approve_withdrawal(self, request, queryset):
         for withdrawal in queryset:
@@ -67,45 +68,62 @@ class WithdrawalRequestAdmin(admin.ModelAdmin):
             convert_to = withdrawal.convert_to
             payment_method = withdrawal.payment_method
 
+            # Get exchange rate
             rate = self.get_exchange_rate('USD', 'ETB' if convert_to == 'birr' else 'ETB')
             if rate == 0:
                 rate = 132.1 if convert_to == 'birr' else 0.007571
                 logger.info(f"Using fallback exchange rate {('USD', 'ETB') if convert_to == 'birr' else ('ETB', 'USD')}: {rate}")
 
-            total_available = (campaign.total_usd * Decimal(str(rate)) if convert_to == 'birr' else campaign.total_birr) + \
-                             (campaign.total_birr if convert_to == 'birr' else campaign.total_usd * Decimal(str(rate)))
+            # Calculate total available balance in the requested currency
+            if convert_to == 'birr':
+                total_available = campaign.total_birr + (campaign.total_usd * Decimal(str(rate)))
+            else:  # convert_to == 'usd'
+                total_available = campaign.total_usd + (campaign.total_birr / Decimal(str(rate)))
             total_available = total_available.quantize(Decimal('0.01'))
+
+            # Check if sufficient funds are available
             if requested_amount > total_available:
                 self.message_user(request, f"Insufficient funds for withdrawal {withdrawal.id}! Requested {requested_amount} {convert_to.upper()}, available {total_available} {convert_to.upper()}.", level=messages.ERROR)
                 continue
 
+            # Deduct the requested amount
             deduct_usd = Decimal('0.00')
             deduct_birr = Decimal('0.00')
             if convert_to == 'usd':
                 deduct_usd = min(requested_amount, campaign.total_usd)
                 remaining_usd = requested_amount - deduct_usd
-                deduct_birr = (remaining_usd / Decimal(str(rate))).quantize(Decimal('0.01')) if rate != 0 else Decimal('0.00')
-                if deduct_birr > campaign.total_birr:
-                    self.message_user(request, f"Insufficient Birr funds for withdrawal {withdrawal.id}!", level=messages.ERROR)
-                    continue
+                if remaining_usd > 0:
+                    deduct_birr = (remaining_usd * Decimal(str(rate))).quantize(Decimal('0.01'))
+                    if deduct_birr > campaign.total_birr:
+                        self.message_user(request, f"Insufficient Birr funds for withdrawal {withdrawal.id}!", level=messages.ERROR)
+                        continue
             else:  # convert_to == 'birr'
                 deduct_birr = min(requested_amount, campaign.total_birr)
                 remaining_birr = requested_amount - deduct_birr
-                deduct_usd = (remaining_birr / Decimal(str(rate))).quantize(Decimal('0.01')) if rate != 0 else Decimal('0.00')
-                if deduct_usd > campaign.total_usd:
-                    self.message_user(request, f"Insufficient USD funds for withdrawal {withdrawal.id}!", level=messages.ERROR)
-                    continue
+                if remaining_birr > 0:
+                    deduct_usd = (remaining_birr / Decimal(str(rate))).quantize(Decimal('0.01'))
+                    if deduct_usd > campaign.total_usd:
+                        self.message_user(request, f"Insufficient USD funds for withdrawal {withdrawal.id}!", level=messages.ERROR)
+                        continue
 
+            # Update campaign balances
             campaign.total_usd -= deduct_usd
             campaign.total_birr -= deduct_birr
             campaign.save()
 
+            # Update withdrawal status
             withdrawal.status = 'approved'
             withdrawal.processed_at = timezone.now()
             withdrawal.save()
 
+            # Calculate total withdrawn amount and process payment
+            if convert_to == 'usd':
+                total_withdrawn = deduct_usd + (deduct_birr / Decimal(str(rate))).quantize(Decimal('0.01'))
+            else:  # convert_to == 'birr'
+                total_withdrawn = deduct_birr + (deduct_usd * Decimal(str(rate))).quantize(Decimal('0.01'))
+
             if payment_method == 'paypal':
-                result = {'success': True, 'message': f"Simulated PayPal withdrawal of {deduct_usd} USD to {withdrawal.recipient_email}"}
+                result = {'success': True, 'message': f"Simulated PayPal withdrawal of {total_withdrawn} USD to {withdrawal.recipient_email}"}
                 if result.get('success', False):
                     self.message_user(request, f"Withdrawal {withdrawal.id} approved: {result['message']}", messages.SUCCESS)
                     logger.info(f"Withdrawal {withdrawal.id} approved: {result['message']}")
@@ -114,7 +132,7 @@ class WithdrawalRequestAdmin(admin.ModelAdmin):
                     self.message_user(request, f"Withdrawal {withdrawal.id} failed: {message}", messages.ERROR)
                     logger.error(f"Withdrawal {withdrawal.id} failed: {message}")
             elif payment_method == 'chapa':
-                result = {'success': True, 'message': f"Simulated Chapa withdrawal of {deduct_birr} ETB"}
+                result = {'success': True, 'message': f"Simulated Chapa withdrawal of {total_withdrawn} ETB"}
                 if result.get('success', False):
                     self.message_user(request, f"Withdrawal {withdrawal.id} approved: {result['message']}", messages.SUCCESS)
                     logger.info(f"Withdrawal {withdrawal.id} approved: {result['message']}")

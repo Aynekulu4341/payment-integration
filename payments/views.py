@@ -54,7 +54,7 @@ def initiate_chapa_payment(amount, campaign_id):
         "last_name": "User",
         "tx_ref": f"CHAPA-{int(time.time())}-{campaign_id}",
         "callback_url": f"{settings.SITE_URL}/api/callback/chapa/",
-        "return_url": f"{settings.SITE_URL}/api/callback/chapa/?campaign_id={campaign_id}"  # Pass campaign_id in return_url
+        "return_url": f"{settings.SITE_URL}/api/callback/chapa/?campaign_id={campaign_id}"
     }
     try:
         logger.debug(f"Sending Chapa request with payload: {payload}")
@@ -225,9 +225,7 @@ class DonateView(APIView):
                     payment_method='chapa',
                     transaction_id=result['transaction_id']
                 )
-                # Store transaction_id in session
                 request.session['chapa_tx_ref'] = result['transaction_id']
-                # Force session save to ensure the session is persisted
                 request.session.modified = True
                 logger.debug(f"Stored chapa_tx_ref in session: {result['transaction_id']}")
                 logger.debug(f"Created Chapa transaction: {transaction.transaction_id} for campaign {campaign_id}")
@@ -327,8 +325,7 @@ class ChapaCallbackView(APIView):
         logger.debug(f"Session data: {request.session.items()}")
         transaction_id = request.GET.get('tx_ref') or request.session.get('chapa_tx_ref')
         if not transaction_id:
-            # Attempt to find the most recent Chapa transaction for this campaign as a fallback
-            campaign_id = request.GET.get('campaign_id')  # Assuming campaign_id might be passed in the URL
+            campaign_id = request.GET.get('campaign_id')
             if campaign_id:
                 try:
                     recent_transaction = Transaction.objects.filter(
@@ -411,7 +408,6 @@ class PayPalCallbackView(APIView):
             request.session['paypal_error'] = "Missing token in PayPal callback."
             return HttpResponseRedirect(reverse('test_page'))
 
-        # Fetch order details using the token
         auth_url = "https://api-m.sandbox.paypal.com/v1/oauth2/token"
         auth_headers = {"Accept": "application/json", "Accept-Language": "en_US"}
         auth_data = {"grant_type": "client_credentials"}
@@ -432,7 +428,6 @@ class PayPalCallbackView(APIView):
             request.session['paypal_error'] = "No PayPal access token received."
             return HttpResponseRedirect(reverse('test_page'))
 
-        # Use the token to get the order ID
         order_url = f"https://api-m.sandbox.paypal.com/v2/checkout/orders/{token}"
         headers = {'Content-Type': 'application/json', 'Authorization': f'Bearer {access_token}'}
         order_response = requests.get(order_url, headers=headers)
@@ -519,6 +514,7 @@ class WithdrawView(APIView):
         campaign_id = data.get('campaign_id', '').strip()
         payment_method = data.get('payment_method', '').strip()
         recipient_email = data.get('recipient_email', '').strip()
+        recipient_phone = data.get('recipient_phone', '').strip()  # New field for Chapa
         amount = data.get('amount', '').strip()
         convert_to = data.get('convert_to', 'birr').strip().lower()
 
@@ -543,6 +539,10 @@ class WithdrawView(APIView):
             logger.error("Missing recipient email for PayPal")
             request.session['withdrawal_error'] = "Please provide a recipient email for PayPal."
             return HttpResponseRedirect(reverse('test_page'))
+        if payment_method == 'chapa' and not recipient_phone:
+            logger.error("Missing recipient phone for Chapa")
+            request.session['withdrawal_error'] = "Please provide a recipient telephone number for Chapa."
+            return HttpResponseRedirect(reverse('test_page'))
 
         amount_val, amount_error = validate_amount(amount)
         if amount_error:
@@ -551,15 +551,18 @@ class WithdrawView(APIView):
             return HttpResponseRedirect(reverse('test_page'))
 
         # Get the exchange rate
-        rate = self.get_exchange_rate('USD', 'ETB' if convert_to == 'birr' else 'USD')
+        rate = self.get_exchange_rate('USD', 'ETB')
         if rate == 0:
-            rate = 132.1 if convert_to == 'birr' else 0.007571
-            logger.info(f"Using fallback exchange rate {('USD', 'ETB') if convert_to == 'birr' else ('ETB', 'USD')}: {rate}")
+            rate = 132.1  # Fallback rate
+            logger.info(f"Using fallback exchange rate USD to ETB: {rate}")
 
         # Convert requested amount to Birr for comparison
-        amount_in_birr = amount_val * Decimal(str(rate)) if convert_to == 'birr' else amount_val / Decimal(str(rate))
+        if convert_to == 'birr':
+            amount_in_birr = amount_val  # Use the amount directly if requesting in Birr
+        else:  # convert_to == 'usd'
+            amount_in_birr = amount_val * Decimal(str(rate))  # Convert USD to ETB
 
-        # Calculate total available balance in Birr (including USD conversion)
+        # Calculate total available balance in Birr
         total_available = campaign.total_birr + (campaign.total_usd * Decimal(str(rate)))
 
         if total_available < amount_in_birr:
@@ -572,7 +575,8 @@ class WithdrawView(APIView):
                 campaign=campaign,
                 requested_amount=amount_val,
                 payment_method=payment_method,
-                recipient_email=recipient_email,
+                recipient_email=recipient_email if payment_method == 'paypal' else None,
+                recipient_phone=recipient_phone if payment_method == 'chapa' else None,
                 convert_to=convert_to
             )
             logger.debug(f"Withdrawal request created: ID {withdrawal.id}, {amount_val} {convert_to.upper()}")

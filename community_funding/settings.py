@@ -9,7 +9,8 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = config('SECRET_KEY')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+# Set DEBUG = False for production to avoid exposing sensitive info in error pages
+DEBUG = False
 
 ALLOWED_HOSTS = ['beko41.pythonanywhere.com', '127.0.0.1', 'localhost']
 
@@ -40,7 +41,7 @@ ROOT_URLCONF = 'community_funding.urls'
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [BASE_DIR / 'templates'],
+        'DIRS': [BASE_DIR / 'templates'],  # Ensure templates directory is included
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
@@ -88,14 +89,19 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 STATIC_URL = '/static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
-
+STATICFILES_DIRS = [
+    BASE_DIR / 'static',
+]
 # Media files
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
-LOGIN_REDIRECT_URL = '/accounts/profile/'
-LOGIN_URL = '/accounts/login/'
-LOGOUT_REDIRECT_URL = None
-# Logging configuration
+
+# Authentication settings
+#LOGIN_URL = '/accounts/login/'  # Used by @login_required
+LOGIN_REDIRECT_URL = '/test/'  # Redirect after successful login
+LOGOUT_REDIRECT_URL = '/test/'  # Redirect after logout (updated from None)
+
+# Logging configuration with rotation to prevent debug.log from growing too large
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,
@@ -108,8 +114,10 @@ LOGGING = {
     'handlers': {
         'file': {
             'level': 'DEBUG',
-            'class': 'logging.FileHandler',
+            'class': 'logging.handlers.RotatingFileHandler',
             'filename': BASE_DIR / 'debug.log',
+            'maxBytes': 1024 * 1024 * 5,  # 5 MB
+            'backupCount': 2,
             'formatter': 'verbose',
         },
         'console': {
